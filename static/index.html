@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wi-Fi Network Map</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header>
+      <div>
+        <p class="eyebrow">LOCAL NETWORK OBSERVATORY</p>
+        <h1>Wi-Fi Network Map</h1>
+        <p id="summary">Waiting for the first discovery pass…</p>
+      </div>
+      <button id="scan">Scan now</button>
+    </header>
+    <main>
+      <section class="map-card">
+        <div class="legend"><span class="online"></span>Online <span class="offline"></span>Offline</div>
+        <svg id="map" viewBox="0 0 1000 620" aria-label="Network topology"></svg>
+      </section>
+      <aside>
+        <h2>Devices</h2>
+        <div id="devices"></div>
+      </aside>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
+
