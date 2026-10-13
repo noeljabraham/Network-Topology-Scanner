@@ -1,131 +1,139 @@
 # Wi-Fi Network Map
 
-A local-first network inventory and topology dashboard. It discovers devices on the LAN, records IP/MAC/hostname/ports, tracks online/offline state, and pushes topology updates to the browser in real time.
+A Kali/Linux-focused network inventory and live topology application for networks you own or are explicitly authorized to assess. It combines Nmap with operating-system neighbor data, retains scan history in SQLite, and displays confidence-labelled topology in a browser.
 
-> Only scan networks you own or are explicitly authorized to assess. The default scanner is intentionally limited to at most 1,024 IPv4 addresses and a small allowlist of common TCP ports.
+## Capabilities
 
-## What the MVP does
+- Nmap discovery, standard service, and privileged deep scan profiles
+- IPv4/MAC address, vendor, hostname, open-port, service/version, and OS-fingerprint import
+- Native ping/neighbor-cache fallback when Nmap is unavailable
+- First/last seen and online/offline inventory
+- Scan-run audit history and per-device snapshots
+- Live Server-Sent Events dashboard
+- Observed versus inferred topology edges
+- Vendor-neutral controller/SNMP/LLDP topology import
+- CSV export, optional bearer-token protection, SQLite WAL persistence
+- `/22` maximum target and Nmap retry/host-timeout limits
+- Kali installer and Docker packaging
 
-- Detects the computer's local IPv4 address, `/24` network, and default gateway.
-- Performs bounded, concurrent ICMP discovery.
-- Enriches results from the operating system ARP/neighbor cache.
-- Resolves hostnames and checks a small set of common service ports.
-- Stores first seen, last seen, current state, IP, MAC, hostname, role, and ports in SQLite.
-- Displays a live topology and device inventory; updates arrive over Server-Sent Events.
-- Models ordinary Wi-Fi topology honestly: client-to-gateway links are marked as **inferred**.
+No scanner can guarantee that every device is visible. Sleeping clients, Wi-Fi isolation, VLANs, firewalls, NAT, and IPv6-only hosts can hide devices. Nmap also cannot identify an exact access point or switch port without infrastructure data.
 
 ## Architecture
 
 ```text
-ping sweep ─┐
-ARP cache ──┼─> discovery/enrichment ─> SQLite ─> FastAPI ─> SSE ─> browser SVG map
-DNS lookup ─┤
-port probe ─┘
+Nmap XML ───────────────┐
+Linux neighbor cache ──┼──> normalized devices/services ──> SQLite history
+native fallback ───────┘                                  │
+                                                          ├─> REST + CSV
+controller/SNMP/LLDP JSON ──> observed topology edges ────┴─> SSE dashboard
 ```
 
-The collector runs on a machine connected to the target LAN. The HTTP service binds to localhost by default; discovery data does not leave the computer.
-
-## Run it
-
-Requires Python 3.11+ and the system `ping`, `arp` or `ip` command.
+## Kali installation
 
 ```bash
-python3 -m venv .venv
+chmod +x scripts/install-kali.sh
+./scripts/install-kali.sh
+cp .env.example .env
 source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --host 127.0.0.1 --port 8000
+NETWORK_CIDR=192.168.1.0/24 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open <http://127.0.0.1:8000>. The first scan starts automatically. To override the conservative `/24` guess:
+Open <http://127.0.0.1:8000>. Replace the CIDR with the authorized local network shown by `ip route`. Do not blindly copy the example range.
+
+### Scan profiles
+
+| Profile | Nmap behavior | Privilege | Use |
+|---|---|---|---|
+| `discovery` | ARP/ping host discovery | Usually unprivileged | Frequent presence checks |
+| `standard` | TCP connect, top 100 ports, light version detection | Unprivileged | Normal inventory |
+| `deep` | SYN, top 1,000 ports, versions, OS and traceroute | Root or `CAP_NET_RAW` | Infrequent authorized assessment |
+
+The dashboard launches Nmap directly with fixed arguments; the user cannot inject arbitrary command-line flags. Deep scanning is intentionally never the default automatic profile.
+
+## Configuration
+
+Copy `.env.example` or export variables before starting:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `NETWORK_CIDR` | detected address `/24` | Explicit authorized target, maximum `/22` |
+| `SCAN_ENGINE` | `nmap` | `nmap` or `native` |
+| `SCAN_PROFILE` | `discovery` | Automatic scan profile |
+| `SCAN_INTERVAL_SECONDS` | `300` | Automatic interval, minimum 30 seconds |
+| `AUTO_SCAN` | `true` | Enable scheduled scanning |
+| `API_TOKEN` | empty | Protect API when set |
+| `DATABASE_PATH` | `network_map.db` | SQLite location |
+| `TOPOLOGY_FILE` | empty | Verified topology JSON path |
+
+If `API_TOKEN` is set, open `http://127.0.0.1:8000/?token=YOUR_TOKEN` once. The UI stores it in browser local storage and sends it with requests. Prefer a reverse proxy with TLS if the interface is exposed beyond localhost.
+
+## API
+
+- `GET /api/health` — Nmap availability and detected network
+- `GET /api/topology` — devices, evidence-labelled links, scan state
+- `GET /api/devices/{ip}` — device and historical snapshots
+- `GET /api/scans` — scan audit history
+- `POST /api/scan` — launch a `discovery`, `standard`, or `deep` scan
+- `GET /api/export.csv` — current inventory export
+- `GET /api/events` — live event stream
+- `GET /docs` — generated OpenAPI documentation
+
+Example:
 
 ```bash
-NETWORK_CIDR=192.168.1.0/24 SCAN_INTERVAL_SECONDS=60 uvicorn app.main:app
+curl -X POST http://127.0.0.1:8000/api/scan \
+  -H 'Content-Type: application/json' \
+  -d '{"profile":"standard","engine":"nmap"}'
 ```
 
-API endpoints:
+## Exact topology
 
-- `GET /api/topology` — current nodes, links, and scan status
-- `POST /api/scan` — trigger a discovery pass
-- `GET /api/events` — live SSE event stream
-- `GET /docs` — interactive OpenAPI documentation
+The application labels gateway-to-client edges as `inferred` with 50% confidence. To supply real associations, export switch/controller evidence into the interchange format shown in `topology.example.json` and set `TOPOLOGY_FILE`.
 
-## What each field means
-
-| Field | Source | Reliability |
-|---|---|---|
-| IP | ICMP response, local host, gateway, ARP cache | High at observation time |
-| MAC | OS neighbor/ARP cache | High on the same L2 subnet; unavailable across routers |
-| Hostname | Reverse DNS | Best effort |
-| Open ports | Short TCP connection probes to an allowlist | Best effort; firewalls can hide services |
-| Online | Seen in the latest scan | Probabilistic; some devices ignore ping |
-| Link | Gateway-centered inference in the MVP | Not a physical connection claim |
-
-## Implementation roadmap
-
-### Phase 1 — current MVP
-
-The included implementation provides safe discovery, persistence, API, live events, and a responsive map. It avoids raw-packet/root requirements, so it is easy to run on macOS and Linux.
-
-### Phase 2 — higher discovery accuracy
-
-Add pluggable collectors and merge observations rather than replacing records:
-
-- ARP broadcast discovery with Scapy for same-subnet devices that ignore ICMP (requires elevated packet privileges).
-- mDNS/Bonjour (`_services._dns-sd._udp.local`) for names and device/service types.
-- SSDP/UPnP discovery for TVs, speakers, routers, and media devices.
-- DHCP lease import from supported routers.
-- Local IEEE OUI database for offline MAC-vendor lookup.
-- Optional Nmap adapter for authorized, deeper service and OS fingerprinting.
-
-Every observation should record `source`, `observed_at`, and `confidence`, allowing conflicts to be reconciled safely.
-
-### Phase 3 — real topology
-
-A client on a flat WLAN generally cannot determine which AP or switch port every device uses. Add adapters for infrastructure that exposes this data:
-
-- SNMPv3 bridge forwarding tables and ARP tables from managed switches/routers.
-- LLDP/CDP neighbor tables for switch-to-switch and switch-to-AP edges.
-- Controller APIs (UniFi, Omada, Aruba, Meraki) for client-to-AP associations, signal, VLAN, and traffic.
-
-Label links `observed` only when supplied by one of these sources. Retain `inferred` and a confidence score for all heuristics.
-
-### Phase 4 — product features
-
-- Device fingerprinting and user-defined names/tags.
-- New-device, offline, and vendor-change alerts.
-- Historical presence, IP changes, and topology snapshots.
-- VLAN/subnet views, search, filters, and device detail panels.
-- Authentication, encrypted secrets, audit logs, retention controls, and Docker packaging.
-- Prometheus metrics and webhook/email notification adapters.
-
-## Production data model
-
-The MVP keeps one current row per IP for simplicity. A production model should use stable device identities and append-only observations:
-
-```text
-Device(id, canonical_mac, user_name, vendor, type, first_seen, last_seen)
-Interface(id, device_id, mac, ip, vlan, first_seen, last_seen)
-Observation(id, interface_id, source, payload, confidence, observed_at)
-Link(id, source_device, target_device, kind, source, confidence, observed_at)
-Service(id, interface_id, protocol, port, name, product, version, observed_at)
+```json
+[
+  {
+    "source": "192.168.1.1",
+    "target": "192.168.1.20",
+    "kind": "observed",
+    "confidence": 1.0,
+    "evidence": "UniFi client-to-AP association"
+  }
+]
 ```
 
-Do not use IP as permanent identity: DHCP changes it, and privacy MAC rotation can also split one physical client into multiple identities.
+Typical producers are UniFi/Omada/Meraki controller APIs, SNMPv3 bridge forwarding tables, and LLDP/CDP neighbor tables. Observed edges override inferred edges for the same target. This boundary is deliberate: the program never presents a guessed physical connection as fact.
 
-## Security design
+For Docker, either bake the generated file into an image or add a read-only bind mount and set `TOPOLOGY_FILE` to its path inside the container.
 
-- Bind to `127.0.0.1` unless authentication and TLS are configured.
-- Keep scan CIDRs in an explicit allowlist and enforce address-count/rate limits.
-- Store SNMP/controller credentials in an OS keychain or secret manager, never SQLite or source control.
-- Use SNMPv3 rather than SNMPv2 community strings.
-- Treat hostnames and service banners as untrusted input; escape them in the UI.
-- Run the web service unprivileged. If raw ARP is added, isolate it in a small capability-limited helper.
-- Make active/deep scanning opt-in and preserve an audit trail of who initiated it.
+## Docker
 
-## Known MVP limitations
+Docker host networking is intended for Linux because discovery broadcasts must reach the LAN:
 
-- `/24` is guessed because interface netmask detection varies by OS; set `NETWORK_CIDR` when needed.
-- ICMP-only devices may be missed until they appear in the neighbor table.
-- MAC vendor lookup and real AP/switch topology are roadmap items.
-- IPv6 discovery is not implemented.
-- A record is considered offline after one missed pass; production should require several misses and track scan coverage.
+```bash
+cp .env.example .env
+# Edit NETWORK_CIDR in .env first.
+docker compose up --build -d
+```
+
+The container runs as an unprivileged user. `NET_RAW`/`NET_ADMIN` capabilities are included for deep scans and may be removed when only discovery/standard profiles are used.
+
+## Security model
+
+- Only scan systems for which you have authorization.
+- Keep the service on `127.0.0.1` unless token authentication and TLS are configured.
+- Target size, retries, per-host duration, and total scan duration are bounded.
+- Nmap arguments are selected from fixed profiles; request data never becomes shell syntax.
+- Hostnames and service information are rendered with `textContent`, not HTML.
+- Infrastructure credentials are not stored by this application. A separate adapter should write sanitized link JSON.
+- SQLite history may reveal device presence patterns; protect and periodically rotate the database.
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests -v
+node --check static/app.js
+python3 -m compileall -q app tests
+```
+
+The unit suite covers database updates, history/offline behavior, scan-range restrictions, and Nmap XML parsing. Integration scans require Nmap and an explicitly authorized test network.

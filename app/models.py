@@ -9,6 +9,19 @@ def utc_now() -> str:
 
 
 @dataclass(slots=True)
+class Service:
+    port: int
+    protocol: str = "tcp"
+    state: str = "open"
+    name: str | None = None
+    product: str | None = None
+    version: str | None = None
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(slots=True)
 class Device:
     ip: str
     mac: str | None = None
@@ -18,10 +31,19 @@ class Device:
     role: str = "client"
     first_seen: str = field(default_factory=utc_now)
     last_seen: str = field(default_factory=utc_now)
-    open_ports: list[int] = field(default_factory=list)
+    os_name: str | None = None
+    os_accuracy: int | None = None
+    services: list[Service] = field(default_factory=list)
+    sources: list[str] = field(default_factory=list)
+
+    @property
+    def open_ports(self) -> list[int]:
+        return sorted({service.port for service in self.services if service.state == "open"})
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        value = asdict(self)
+        value["open_ports"] = self.open_ports
+        return value
 
 
 @dataclass(slots=True)
@@ -30,6 +52,7 @@ class Link:
     target: str
     kind: str = "inferred"
     confidence: float = 0.5
+    evidence: str = "gateway inference"
 
     def to_dict(self) -> dict:
         return asdict(self)

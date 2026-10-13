@@ -1,0 +1,9 @@
+[
+  {
+    "source": "192.168.1.1",
+    "target": "192.168.1.20",
+    "kind": "observed",
+    "confidence": 1.0,
+    "evidence": "controller client association"
+  }
+]

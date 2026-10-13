@@ -13,7 +13,15 @@
         <h1>Wi-Fi Network Map</h1>
         <p id="summary">Waiting for the first discovery pass…</p>
       </div>
-      <button id="scan">Scan now</button>
+      <div class="actions">
+        <select id="profile" aria-label="Scan profile">
+          <option value="discovery">Discovery</option>
+          <option value="standard" selected>Standard</option>
+          <option value="deep">Deep (privileged)</option>
+        </select>
+        <button id="scan">Scan now</button>
+        <a class="export" href="/api/export.csv">Export CSV</a>
+      </div>
     </header>
     <main>
       <section class="map-card">

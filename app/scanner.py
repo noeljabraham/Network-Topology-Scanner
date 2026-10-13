@@ -8,7 +8,7 @@ import socket
 import subprocess
 from dataclasses import dataclass
 
-from .models import Device, utc_now
+from .models import Device, Service, utc_now
 
 
 MAC_PATTERN = re.compile(r"(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}")
@@ -148,7 +148,8 @@ async def discover(cidr: str | None = None) -> tuple[NetworkInfo, list[Device]]:
             hostname=hostname,
             role=role,
             last_seen=utc_now(),
-            open_ports=ports,
+            services=[Service(port=port) for port in ports],
+            sources=["ping", "neighbor-cache" if ip in neighbors else "tcp-probe"],
         )
 
     devices = await asyncio.gather(*(enrich(ip) for ip in sorted(ips, key=ipaddress.ip_address)))

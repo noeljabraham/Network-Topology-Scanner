@@ -1,0 +1,23 @@
+services:
+  network-map:
+    build: .
+    network_mode: host
+    environment:
+      NETWORK_CIDR: ${NETWORK_CIDR:?Set NETWORK_CIDR in .env}
+      SCAN_ENGINE: ${SCAN_ENGINE:-nmap}
+      SCAN_PROFILE: ${SCAN_PROFILE:-discovery}
+      SCAN_INTERVAL_SECONDS: ${SCAN_INTERVAL_SECONDS:-300}
+      API_TOKEN: ${API_TOKEN:-}
+      DATABASE_PATH: /data/network_map.db
+      # Set to /app/topology.example.json after replacing that file with real evidence.
+      TOPOLOGY_FILE: ${TOPOLOGY_FILE:-}
+    volumes:
+      - network-map-data:/data
+    # Deep SYN/OS scans require NET_RAW. Remove this for discovery/standard scans.
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    restart: unless-stopped
+
+volumes:
+  network-map-data:

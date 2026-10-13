@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from app.models import Device
+from app.nmap_scanner import parse_xml
 from app.scanner import network_info
 from app.store import DeviceStore
 
@@ -38,6 +39,30 @@ class ScannerSafetyTests(unittest.TestCase):
     def test_accepts_bounded_range(self):
         info = network_info("192.168.10.0/24")
         self.assertEqual(info.network, ipaddress.ip_network("192.168.10.0/24"))
+
+
+class NmapParserTests(unittest.TestCase):
+    def test_parses_identity_services_and_os(self):
+        xml = """<?xml version="1.0"?>
+        <nmaprun><host><status state="up"/>
+          <address addr="192.168.1.1" addrtype="ipv4"/>
+          <address addr="AA:BB:CC:DD:EE:FF" addrtype="mac" vendor="Example Networks"/>
+          <hostnames><hostname name="router.local"/></hostnames>
+          <ports><port protocol="tcp" portid="443"><state state="open"/>
+            <service name="https" product="Example UI" version="1.2"/>
+          </port></ports>
+          <os><osmatch name="Linux 5.x" accuracy="96"/></os>
+        </host></nmaprun>"""
+        device = parse_xml(xml, gateway="192.168.1.1")[0]
+        self.assertEqual(device.role, "gateway")
+        self.assertEqual(device.vendor, "Example Networks")
+        self.assertEqual(device.open_ports, [443])
+        self.assertEqual(device.services[0].product, "Example UI")
+        self.assertEqual(device.os_accuracy, 96)
+
+    def test_ignores_down_hosts(self):
+        xml = '<nmaprun><host><status state="down"/><address addr="192.168.1.8" addrtype="ipv4"/></host></nmaprun>'
+        self.assertEqual(parse_xml(xml), [])
 
 
 if __name__ == "__main__":
