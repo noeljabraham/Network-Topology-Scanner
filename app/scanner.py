@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import platform
 import re
 import socket
@@ -33,10 +34,35 @@ def local_ip() -> str:
         sock.close()
 
 
+def interface_addresses() -> list[str]:
+    """Return configured IPv4 interface addresses without third-party packages."""
+    try:
+        output = subprocess.check_output(
+            ["ip", "-j", "-4", "addr", "show"], text=True,
+            stderr=subprocess.DEVNULL, timeout=2,
+        )
+        return [
+            item["local"]
+            for interface in json.loads(output)
+            for item in interface.get("addr_info", [])
+            if item.get("family") == "inet" and item.get("local")
+        ]
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, KeyError):
+        pass
+    try:
+        output = subprocess.check_output(
+            ["ifconfig"], text=True, stderr=subprocess.DEVNULL, timeout=2
+        )
+        return re.findall(r"\binet\s+(\d+(?:\.\d+){3})", output)
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+
 def default_gateway() -> str | None:
     commands = (
         ["route", "-n", "get", "default"],
         ["ip", "route", "show", "default"],
+        ["ip", "route", "get", "1.1.1.1"],
     )
     for command in commands:
         try:
@@ -52,11 +78,15 @@ def default_gateway() -> str | None:
 
 
 def network_info(cidr: str | None = None) -> NetworkInfo:
-    ip = local_ip()
-    # /24 is intentionally conservative. Production should read the interface netmask.
-    network = ipaddress.ip_network(cidr or f"{ip}/24", strict=False)
+    fallback_ip = local_ip()
+    candidates = [value for value in interface_addresses() if value != "127.0.0.1"]
+    seed_ip = fallback_ip if fallback_ip != "127.0.0.1" else (candidates[0] if candidates else fallback_ip)
+    # /24 remains a conservative cross-platform fallback. When an explicit CIDR
+    # is supplied, choose the actual interface address belonging to that network.
+    network = ipaddress.ip_network(cidr or f"{seed_ip}/24", strict=False)
     if network.num_addresses > 1024:
         raise ValueError("Scan ranges larger than /22 are disabled for safety")
+    ip = next((value for value in candidates if ipaddress.ip_address(value) in network), seed_ip)
     return NetworkInfo(ip, network, default_gateway())
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import os
 import shutil
 import xml.etree.ElementTree as ET
 
@@ -40,6 +41,15 @@ def parse_xml(xml: str, gateway: str | None = None, local: str | None = None) ->
         status = host.find("status")
         if status is None or status.get("state") != "up":
             continue
+        # With -Pn Nmap initially labels every target "up" with reason=user-set.
+        # Retain it only when a TCP response supplies positive evidence.
+        if status.get("reason") == "user-set":
+            ports_node = host.find("ports")
+            explicit_ports = ports_node.findall("port") if ports_node is not None else []
+            extra = ports_node.find("extraports") if ports_node is not None else None
+            positively_closed = extra is not None and extra.get("state") == "closed"
+            if not explicit_ports and not positively_closed:
+                continue
         addresses = {node.get("addrtype"): node for node in host.findall("address")}
         ip_node = addresses.get("ipv4")
         if ip_node is None:
@@ -80,11 +90,21 @@ async def scan(cidr: str, profile: str, gateway: str | None, local: str | None) 
         raise ValueError("Nmap target may contain at most 1,024 addresses")
     common = ["-n", "--max-retries", "2", "--host-timeout", "45s"]
     if profile == "discovery":
-        args, timeout = ["-sn", "-PR", *common, str(network)], 180
+        # Nmap automatically chooses ARP on a directly connected Ethernet/Wi-Fi LAN
+        # when privileges allow it and connect-based probes otherwise.
+        args, timeout = ["-sn", *common, str(network)], 180
     elif profile == "standard":
-        args, timeout = ["-sT", "-sV", "--version-light", "--top-ports", "100", "-T4", *common, str(network)], 600
+        # -Pn avoids an unreliable ICMP-only gate. parse_xml discards targets for
+        # which no positive TCP evidence was received, preventing 254 false hosts.
+        args, timeout = ["-Pn", "-sT", "-sV", "--version-light", "--top-ports", "100", "-T4", *common, str(network)], 600
     elif profile == "deep":
-        args, timeout = ["-sS", "-sV", "-O", "--traceroute", "--top-ports", "1000", "-T4", *common, str(network)], 1800
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            args = ["-Pn", "-sS", "-sV", "-O", "--traceroute", "--top-ports", "1000", "-T4", *common, str(network)]
+        else:
+            # Still provide a useful deep service scan without crashing. OS
+            # fingerprinting and SYN scanning become available when run as root.
+            args = ["-Pn", "-sT", "-sV", "--version-all", "--top-ports", "1000", "-T4", *common, str(network)]
+        timeout = 1800
     else:
         raise ValueError("profile must be discovery, standard, or deep")
     return parse_xml(await _run(args, timeout), gateway, local)

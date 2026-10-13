@@ -29,7 +29,8 @@ function textElement(tag, value, className) {
 function draw(data) {
   const devices = data.devices || [], online = devices.filter(d => d.state === 'online');
   const status = data.scan.running ? ` · ${data.scan.profile} scan running` : data.scan.last_error ? ` · error: ${data.scan.last_error}` : '';
-  summary.textContent = `${online.length} online · ${devices.length} known · ${data.scan.network || 'detecting network'}${status}`;
+  const route = data.scan.local_ip ? ` · scanner ${data.scan.local_ip}${data.scan.gateway ? ` → gateway ${data.scan.gateway}` : ' · no gateway detected'}` : '';
+  summary.textContent = `${online.length} online · ${devices.length} known · ${data.scan.network || 'detecting network'}${route}${status}`;
   scanButton.disabled = Boolean(data.scan.running);
   svg.replaceChildren();
   const gateway = devices.find(d => d.role === 'gateway') || online[0];

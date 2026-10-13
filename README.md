@@ -45,10 +45,10 @@ Open <http://127.0.0.1:8000>. Replace the CIDR with the authorized local network
 | Profile | Nmap behavior | Privilege | Use |
 |---|---|---|---|
 | `discovery` | ARP/ping host discovery | Usually unprivileged | Frequent presence checks |
-| `standard` | TCP connect, top 100 ports, light version detection | Unprivileged | Normal inventory |
-| `deep` | SYN, top 1,000 ports, versions, OS and traceroute | Root or `CAP_NET_RAW` | Infrequent authorized assessment |
+| `standard` | Evidence-filtered TCP connect, top 100 ports, light version detection | Unprivileged | Normal inventory |
+| `deep` | Top 1,000 ports and full versions; adds SYN, OS and traceroute as root | Works unprivileged, richer as root | Infrequent authorized assessment |
 
-The dashboard launches Nmap directly with fixed arguments; the user cannot inject arbitrary command-line flags. Deep scanning is intentionally never the default automatic profile.
+The dashboard launches Nmap directly with fixed arguments; the user cannot inject arbitrary command-line flags. Standard/deep scans skip Nmap's often unreliable ICMP discovery gate, but only retain targets that return positive TCP evidence. Results are merged with concurrent ping and neighbor-cache observations. Deep scanning automatically uses an unprivileged TCP-connect fallback rather than aborting when raw-socket access is unavailable.
 
 ## Configuration
 
@@ -137,3 +137,18 @@ python3 -m compileall -q app tests
 ```
 
 The unit suite covers database updates, history/offline behavior, scan-range restrictions, and Nmap XML parsing. Integration scans require Nmap and an explicitly authorized test network.
+
+## Troubleshooting discovery
+
+If the dashboard finds only the router, compare Kali's interface and route with the configured target:
+
+```bash
+ip -4 addr
+ip route
+sudo nmap -sn 192.168.1.0/24
+ip neigh
+```
+
+Kali must have an address inside the scanned subnet. For example, scanning `192.168.1.0/24` normally requires an interface such as `192.168.1.25/24`. If Kali is a VM with an address such as `10.0.2.15`, change the VM adapter from NAT to bridged mode or attach a compatible USB Wi-Fi adapter to the VM. Guest Wi-Fi/client isolation can still prevent clients from seeing one another. If the direct Nmap command sees only the router, the dashboard cannot bypass that network isolation.
+
+After pulling scanner changes, restart Uvicorn. The dashboard now displays the scanner address and gateway beside the target network. A missing gateway or scanner address outside the selected CIDR identifies a routing/configuration problem.

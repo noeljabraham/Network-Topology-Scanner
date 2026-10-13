@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import nmap_scanner
+from .models import Device
 from .scanner import discover, network_info
 from .store import DeviceStore
 from .topology import inferred_links, load_verified_links
@@ -26,12 +27,32 @@ scan_lock = asyncio.Lock()
 scan_state: dict = {
     "running": False, "last_error": None, "network": None,
     "profile": None, "engine": None, "progress": None,
+    "local_ip": None, "gateway": None,
 }
 
 
 class ScanRequest(BaseModel):
     profile: str = "standard"
     engine: str = "nmap"
+
+
+def merge_devices(primary: list[Device], supplemental: list[Device]) -> list[Device]:
+    """Combine evidence without allowing lower-detail probes to erase Nmap data."""
+    merged = {device.ip: device for device in primary}
+    for extra in supplemental:
+        current = merged.get(extra.ip)
+        if current is None:
+            merged[extra.ip] = extra
+            continue
+        current.mac = current.mac or extra.mac
+        current.hostname = current.hostname or extra.hostname
+        current.vendor = current.vendor or extra.vendor
+        if current.role == "client" and extra.role != "client":
+            current.role = extra.role
+        if not current.services:
+            current.services = extra.services
+        current.sources = sorted(set(current.sources + extra.sources))
+    return list(merged.values())
 
 
 async def authorize(
@@ -65,12 +86,19 @@ async def run_scan(cidr: str | None = None, profile: str = "standard", engine: s
         info = network_info(cidr)
         network = str(info.network)
         scan_id = store.begin_scan(network, profile)
-        scan_state.update(running=True, last_error=None, network=network, profile=profile, engine=engine, progress="scanning")
+        scan_state.update(
+            running=True, last_error=None, network=network, profile=profile,
+            engine=engine, progress="scanning", local_ip=info.local_ip, gateway=info.gateway,
+        )
         await publish({"type": "scan", "state": "started", "profile": profile})
         devices = []
         try:
             if engine == "nmap":
                 devices = await nmap_scanner.scan(network, profile, info.gateway, info.local_ip)
+                # Ping and the neighbor cache find devices that expose no TCP ports,
+                # while Nmap provides richer data for hosts that do respond.
+                _, supplemental = await discover(network)
+                devices = merge_devices(devices, supplemental)
             elif engine == "native":
                 _, devices = await discover(network)
             else:

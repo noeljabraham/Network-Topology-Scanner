@@ -64,6 +64,18 @@ class NmapParserTests(unittest.TestCase):
         xml = '<nmaprun><host><status state="down"/><address addr="192.168.1.8" addrtype="ipv4"/></host></nmaprun>'
         self.assertEqual(parse_xml(xml), [])
 
+    def test_ignores_pn_targets_without_response_evidence(self):
+        xml = """<nmaprun><host><status state="up" reason="user-set"/>
+        <address addr="192.168.1.99" addrtype="ipv4"/>
+        <ports><extraports state="filtered" count="100"/></ports></host></nmaprun>"""
+        self.assertEqual(parse_xml(xml), [])
+
+    def test_accepts_pn_target_with_closed_port_evidence(self):
+        xml = """<nmaprun><host><status state="up" reason="user-set"/>
+        <address addr="192.168.1.9" addrtype="ipv4"/>
+        <ports><extraports state="closed" count="100"/></ports></host></nmaprun>"""
+        self.assertEqual(parse_xml(xml)[0].ip, "192.168.1.9")
+
 
 if __name__ == "__main__":
     unittest.main()
